@@ -43,7 +43,7 @@ You can specify the exact tags to filter and the language of the logs.
 python auto_runner.py --pbf "C:\pbf\sample.pbf" --tags all --lang en
 
 # Linux Example (Specific tags, Turkish logs)
-python auto_runner.py --pbf "/var/data/turkey.osm.pbf" --tags military,boundary,telecom --lang tr
+python auto_runner.py --pbf "/var/data/sample.osm.pbf" --tags military,boundary,telecom --lang tr
 ```
 
 ---
@@ -91,5 +91,5 @@ python quick_run.py
 python auto_runner.py --pbf "C:\pbf\sample.pbf" --tags all --lang en
 
 # Linux Örneği (Belirli etiketler, Türkçe Loglar)
-python auto_runner.py --pbf "/var/data/turkey.osm.pbf" --tags military,boundary,telecom --lang tr
+python auto_runner.py --pbf "/var/data/sample.osm.pbf" --tags military,boundary,telecom --lang tr
 ```
