@@ -1,14 +1,15 @@
-# 🌍 ATLAS OSINT Monitor - Zero-Touch ETL Pipeline
+# 🌍 OSM PBF Extractor - Zero-Touch ETL Pipeline
 
 🇬🇧 English | [🇹🇷 Türkçe](#türkçe-dokümantasyon)
 
 An advanced, cross-platform (Windows/Linux) Data Engineering and ETL (Extract, Transform, Load) pipeline designed to securely and efficiently process massive OpenStreetMap (OSM) `.pbf` files. 
 
-It splits planetary-scale data into OSINT (Open-Source Intelligence) categories, separates geometries (Points, Lines, Polygons), and handles system memory smartly using Map-Reduce batching and streaming techniques to avoid RAM crashes on massive layers like `highway` or `building`.
+It splits planetary-scale data into categories, separates geometries (Points, Lines, Polygons), and handles system memory smartly using Map-Reduce batching and streaming techniques to avoid RAM crashes on massive layers like `highway` or `building`.
 
 ## ✨ Key Features
 * **Zero-Touch Execution:** Just point to the source `.pbf`, and the pipeline autonomously handles Docker mounts, Osmium filtering, and GeoPandas exports within its own directory.
 * **Interactive Launcher:** Includes a `quick_run.py` script with drag-and-drop support and pre-defined extraction profiles (Strategic, Infrastructure, etc.).
+* **Enterprise-Grade Stability:** Built-in hardware and OS-level protections against Windows `MAX_PATH` length limits (filename truncation), SQLite "Too Many SQL Variables" errors (chunked database inserts), and GeoPackage schema mismatch issues (strict string typing across chunks).
 * **Cross-Platform:** Automatically generates `.ps1` (PowerShell) for Windows and `.sh` (Bash) for Linux/macOS environments.
 * **Smart Memory Management (Map-Reduce):** Prevents `MemoryError: bad allocation`. RAM is automatically flushed to temporary `.parquet` files every 200,000 records. Once parsing is done, it seamlessly merges them via streaming.
 * **Shapefile 4GB Limit Bypass:** Shapefiles exceeding standard geometry/file size limits are automatically chunked (`_part1.shp`, `_part2.shp`).
@@ -52,11 +53,12 @@ python auto_runner.py --pbf "/var/data/turkey.osm.pbf" --tags military,boundary,
 
 Devasa boyutlardaki OpenStreetMap (OSM) `.pbf` verilerini güvenli, hızlı ve sistem belleğini çökertmeden işlemek için tasarlanmış platformlar arası (Windows/Linux) Veri Mühendisliği ve ETL boru hattıdır.
 
-Verileri OSINT (Açık Kaynak İstihbaratı) kategorilerine böler, her katmanı hiyerarşik olarak noktalar (points), çizgiler (lines) ve poligonlar olarak ayırır. `highway` veya `building` gibi milyarlarca kayıt barındıran katmanlarda sistemin kilitlenmesini önlemek için "Map-Reduce" mantığıyla özel bellek yönetimi uygular.
+Verileri kategorilerine böler, her katmanı hiyerarşik olarak noktalar (points), çizgiler (lines) ve poligonlar olarak ayırır. `highway` veya `building` gibi milyarlarca kayıt barındıran katmanlarda sistemin kilitlenmesini önlemek için "Map-Reduce" mantığıyla özel bellek yönetimi uygular.
 
 ## ✨ Temel Özellikler
 * **Sıfır Temaslı Çalışma:** Sadece ana `.pbf` dosyasının yolunu verin; arka planda Docker'ı ayağa kaldırır, veriyi böler ve GIS formatlarına kendi klasörü içinde dönüştürür.
 * **Etkileşimli Başlatıcı:** Sürükle-bırak destekli ve hazır veri profilleri (Stratejik, Altyapı vb.) sunan `quick_run.py` betiği içerir.
+* **Kurumsal Seviye Kararlılık (Enterprise-Grade):** Windows `MAX_PATH` uzunluk sınırını aşma (etiket kırpma), SQLite "Too Many SQL Variables" çökmesini engelleme (1000'li paketler halinde yazma) ve GeoPackage şema kaymalarını (Schema Mismatch) önleme gibi donanımsal/yazılımsal stres noktalarına karşı tam koruma sağlar.
 * **Çapraz Platform (Cross-Platform):** Windows için otomatik olarak PowerShell (`.ps1`), Linux/macOS için Bash (`.sh`) betikleri üretir.
 * **Akıllı Bellek Yönetimi (Map-Reduce):** RAM şişmesini önler. Her 200.000 kayıtta bir bellek boşaltılarak geçici süper hızlı `.parquet` dosyalarına yazılır. PBF tamamen okunduğunda bu parçalar "Streaming" (akış) yöntemiyle RAM'i yormadan birleştirilir.
 * **Shapefile 4GB Limit Koruması:** Shapefile formatının boyutsal veya satır bazlı limitlerini aşan veriler otomatik olarak `_part1`, `_part2` olarak dilimlenir.

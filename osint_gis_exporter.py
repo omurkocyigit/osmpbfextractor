@@ -20,7 +20,6 @@ OUTPUT_DIR = os.path.join(DATA_DIR, "gis_outputs")
 
 SHP_CHUNK_SIZE = 300000
 
-# Dil Sözlüğü / Language Dictionary
 MSG = {
     "en": {
         "start": "\n=============================================\n  STEP 3: OSINT GIS EXPORTER\n=============================================\n",
@@ -76,7 +75,9 @@ OSINT_TARGET_TAGS = {
 }
 
 def sanitize_name(name):
-    return re.sub(r'(?u)[^-\w.]', '_', str(name).strip())
+    # BOMBA 2 FIX: MAX_PATH çökmesini engellemek için isim uzunluğu 40 karakter ile sınırlandırıldı.
+    clean = re.sub(r'(?u)[^-\w.]', '_', str(name).strip())
+    return clean[:40]
 
 def is_already_processed(tag, lang):
     tag_dir = os.path.join(OUTPUT_DIR, tag)
@@ -94,6 +95,14 @@ def save_temp_batch(records, tag, batch_id):
     if not records: return
 
     df = pd.DataFrame(records)
+    
+    # BOMBA 3 FIX: Veritabanlarında "Schema Mismatch" (Şema Kayması) engellemek için 
+    # sütun tipleri tartışmaya kapalı şekilde String (Metin) olarak zorlandı.
+    str_cols = ['osm_id', 'osm_type', 'name', 'category', 'sub_cat', 'admin_level']
+    for col in str_cols:
+        if col in df.columns:
+            df[col] = df[col].fillna("").astype(str)
+
     df['geometry'] = df['geometry_wkt'].apply(wkt.loads)
     df.drop('geometry_wkt', axis=1, inplace=True)
     gdf = gpd.GeoDataFrame(df, geometry='geometry', crs="EPSG:4326")
@@ -155,7 +164,7 @@ def merge_and_export_final(tag, formats, lang):
             base_filename = os.path.join(subcat_dir, prefix)
 
             first_chunk = True
-            shp_part_num = 1
+            part_num = 1
             
             if "Shapefile (SHP)" in formats:
                 shp_dir = os.path.join(subcat_dir, "shp")
@@ -169,8 +178,10 @@ def merge_and_export_final(tag, formats, lang):
                 chunk_gdf = gpd.read_parquet(part_path)
 
                 if "GeoJSON" in formats:
-                    mode = "w" if first_chunk else "a"
-                    chunk_gdf.to_file(f"{base_filename}.geojson", driver="GeoJSON", engine="pyogrio", mode=mode)
+                    if len(parts) > 1:
+                        chunk_gdf.to_file(f"{base_filename}_part{part_num}.geojson", driver="GeoJSON", engine="pyogrio")
+                    else:
+                        chunk_gdf.to_file(f"{base_filename}.geojson", driver="GeoJSON", engine="pyogrio")
 
                 if "GeoPackage (GPKG)" in formats:
                     mode = "w" if first_chunk else "a"
@@ -180,7 +191,8 @@ def merge_and_export_final(tag, formats, lang):
                     conn = sqlite3.connect(f"{base_filename}.db")
                     temp_df = pd.DataFrame(chunk_gdf.drop(columns='geometry'))
                     temp_df['geometry_wkt'] = chunk_gdf['geometry'].apply(lambda x: x.wkt)
-                    temp_df.to_sql('features', conn, if_exists='replace' if first_chunk else 'append', index=False)
+                    # BOMBA 1 FIX: chunksize=1000 eklendi. Aksi halde SQLite 'too many variables' hatasıyla çöker.
+                    temp_df.to_sql('features', conn, if_exists='replace' if first_chunk else 'append', index=False, chunksize=1000)
                     conn.close()
                     del temp_df
 
@@ -191,11 +203,14 @@ def merge_and_export_final(tag, formats, lang):
                     subset_shp = chunk_gdf.copy()
                     subset_shp.columns = [col[:10] for col in subset_shp.columns] 
                     try:
-                        subset_shp.to_file(os.path.join(shp_dir, f"{prefix}_part{shp_part_num}.shp"), driver="ESRI Shapefile", engine="pyogrio")
+                        if len(parts) > 1:
+                            subset_shp.to_file(os.path.join(shp_dir, f"{prefix}_part{part_num}.shp"), driver="ESRI Shapefile", engine="pyogrio")
+                        else:
+                            subset_shp.to_file(os.path.join(shp_dir, f"{prefix}.shp"), driver="ESRI Shapefile", engine="pyogrio")
                     except Exception: pass
-                    shp_part_num += 1
 
                 first_chunk = False
+                part_num += 1
                 del chunk_gdf
                 gc.collect()
 
