@@ -18,7 +18,7 @@ DATA_DIR = os.path.join(SCRIPT_DIR, "osm_data")
 CONFIG_PATH = os.path.join(SCRIPT_DIR, "export_config.json")
 OUTPUT_DIR = os.path.join(DATA_DIR, "gis_outputs")
 
-SHP_CHUNK_SIZE = 300000
+SHP_CHUNK_SIZE = 1000000 # Parçaları birleştirme eşiği (Her 1M kayıtta bir dosya işlemi yapılır)
 
 MSG = {
     "en": {
@@ -148,7 +148,8 @@ def merge_and_export_final(tag, formats, lang):
         temp_dir = os.path.join(subcat_dir, "temp_parts")
         if not os.path.exists(temp_dir): continue
 
-        temp_files = os.listdir(temp_dir)
+        # Sadece parquet parçalarını al (part_N.parquet formatında)
+        temp_files = [f for f in os.listdir(temp_dir) if f.endswith(".parquet")]
         if not temp_files: continue
 
         prefixes = set()
@@ -158,60 +159,93 @@ def merge_and_export_final(tag, formats, lang):
 
         for prefix in prefixes:
             parts = [f for f in temp_files if f.startswith(f"{prefix}_part")]
+            # Numerik sıralama (part1, part2, part10 vb. doğru sıralansın diye)
             parts.sort(key=lambda x: int(re.search(r'_part(\d+)\.parquet', x).group(1)))
 
             print(MSG[lang]["merge_log"].format(tag, subcat_folder, prefix, len(parts)))
             base_filename = os.path.join(subcat_dir, prefix)
 
-            first_chunk = True
-            part_num = 1
+            shp_part_idx = 1
+            gj_part_idx = 1
             
-            if "Shapefile (SHP)" in formats:
-                shp_dir = os.path.join(subcat_dir, "shp")
-                os.makedirs(shp_dir, exist_ok=True)
-            if "Parquet" in formats:
-                pq_dir = f"{base_filename}.parquet"
-                os.makedirs(pq_dir, exist_ok=True)
+            # RAM patlamasın diye parçaları SHP_CHUNK_SIZE limitine göre (Varsayılan 1M kayıt) gruplayarak birleştiriyoruz.
+            # batch_size, 200k'lık kaç parçanın birleştirileceğini belirler.
+            batch_size = max(1, SHP_CHUNK_SIZE // 200000)
+            
+            for i in range(0, len(parts), batch_size):
+                batch_parts = parts[i:i+batch_size]
+                gdfs = []
+                for p in batch_parts:
+                    gdfs.append(gpd.read_parquet(os.path.join(temp_dir, p)))
+                
+                batch_gdf = pd.concat(gdfs, ignore_index=True)
+                del gdfs
+                gc.collect()
+                
+                is_first_batch = (i == 0)
 
-            for part_file in parts:
-                part_path = os.path.join(temp_dir, part_file)
-                chunk_gdf = gpd.read_parquet(part_path)
-
-                if "GeoJSON" in formats:
-                    if len(parts) > 1:
-                        chunk_gdf.to_file(f"{base_filename}_part{part_num}.geojson", driver="GeoJSON", engine="pyogrio")
-                    else:
-                        chunk_gdf.to_file(f"{base_filename}.geojson", driver="GeoJSON", engine="pyogrio")
-
+                # 1. GeoPackage (GPKG) - Sınır yok, tek dosyada birleştirilir
                 if "GeoPackage (GPKG)" in formats:
-                    mode = "w" if first_chunk else "a"
-                    chunk_gdf.to_file(f"{base_filename}.gpkg", driver="GPKG", layer=prefix, engine="pyogrio", mode=mode)
+                    mode = "w" if is_first_batch else "a"
+                    batch_gdf.to_file(f"{base_filename}.gpkg", driver="GPKG", layer=prefix, engine="pyogrio", mode=mode)
 
+                # 2. SQLite - Sınır yok, tek veritabanı
                 if "SQLite" in formats:
                     conn = sqlite3.connect(f"{base_filename}.db")
-                    temp_df = pd.DataFrame(chunk_gdf.drop(columns='geometry'))
-                    temp_df['geometry_wkt'] = chunk_gdf['geometry'].apply(lambda x: x.wkt)
-                    # BOMBA 1 FIX: chunksize=1000 eklendi. Aksi halde SQLite 'too many variables' hatasıyla çöker.
-                    temp_df.to_sql('features', conn, if_exists='replace' if first_chunk else 'append', index=False, chunksize=1000)
+                    temp_df = pd.DataFrame(batch_gdf.drop(columns='geometry'))
+                    temp_df['geometry_wkt'] = batch_gdf['geometry'].apply(lambda x: x.wkt)
+                    # BOMBA 1 FIX: chunksize=1000 eklendi
+                    temp_df.to_sql('features', conn, if_exists='replace' if is_first_batch else 'append', index=False, chunksize=1000)
                     conn.close()
                     del temp_df
 
+                # 3. Parquet - Küçükse tek dosya, çok büyükse parçalı dizin olarak bırakılır
                 if "Parquet" in formats:
-                    shutil.copy(part_path, os.path.join(pq_dir, part_file))
+                    pq_path = f"{base_filename}.parquet"
+                    if len(parts) <= batch_size:
+                        if os.path.isdir(pq_path): shutil.rmtree(pq_path)
+                        batch_gdf.to_parquet(pq_path)
+                    else:
+                        if os.path.isfile(pq_path): os.remove(pq_path)
+                        os.makedirs(pq_path, exist_ok=True)
+                        batch_gdf.to_parquet(os.path.join(pq_path, f"part_{i//batch_size}.parquet"))
 
+                # 4. Shapefile (SHP) - 4GB Sınırı gözetilerek birleştirilir
                 if "Shapefile (SHP)" in formats:
-                    subset_shp = chunk_gdf.copy()
+                    shp_dir = os.path.join(subcat_dir, "shp")
+                    os.makedirs(shp_dir, exist_ok=True)
+                    subset_shp = batch_gdf.copy()
                     subset_shp.columns = [col[:10] for col in subset_shp.columns] 
-                    try:
-                        if len(parts) > 1:
-                            subset_shp.to_file(os.path.join(shp_dir, f"{prefix}_part{part_num}.shp"), driver="ESRI Shapefile", engine="pyogrio")
+                    
+                    while True:
+                        if len(parts) <= batch_size:
+                            c_shp = os.path.join(shp_dir, f"{prefix}.shp")
                         else:
-                            subset_shp.to_file(os.path.join(shp_dir, f"{prefix}.shp"), driver="ESRI Shapefile", engine="pyogrio")
+                            c_shp = os.path.join(shp_dir, f"{prefix}_part{shp_part_idx}.shp")
+                        
+                        # .shp veya .dbf 3.5GB'ı geçtiyse yeni parta geç (Emniyet sınırı)
+                        dbf_p = c_shp.replace(".shp", ".dbf")
+                        if os.path.exists(c_shp) and (os.path.getsize(c_shp) > 3.5 * 1024**3 or (os.path.exists(dbf_p) and os.path.getsize(dbf_p) > 3.5 * 1024**3)):
+                            shp_part_idx += 1
+                            continue
+                        break
+                    
+                    try:
+                        subset_shp.to_file(c_shp, driver="ESRI Shapefile", engine="pyogrio", mode="a" if os.path.exists(c_shp) else "w")
                     except Exception: pass
+                    del subset_shp
 
-                first_chunk = False
-                part_num += 1
-                del chunk_gdf
+                # 5. GeoJSON - Boyut sınırı ve performans için parçalı birleştirilir
+                if "GeoJSON" in formats:
+                    if len(parts) <= batch_size:
+                        gj_path = f"{base_filename}.geojson"
+                    else:
+                        gj_path = f"{base_filename}_part{gj_part_idx}.geojson"
+                    
+                    batch_gdf.to_file(gj_path, driver="GeoJSON", engine="pyogrio")
+                    gj_part_idx += 1
+
+                del batch_gdf
                 gc.collect()
 
         shutil.rmtree(temp_dir)
