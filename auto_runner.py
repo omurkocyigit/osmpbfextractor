@@ -70,10 +70,15 @@ def clean_old_scripts(lang):
             os.remove(path)
             print(f"{MESSAGES[lang]['removed']}{os.path.basename(path)}")
 
-def create_config_and_script(pbf_path, target_tags, lang):
+def create_config_and_script(pbf_path, target_tags, lang, cache_type):
     print(MESSAGES[lang]["step1"])
     
-    config = {"tags": target_tags, "formats": OUTPUT_FORMATS, "lang": lang}
+    config = {
+        "tags": target_tags, 
+        "formats": OUTPUT_FORMATS, 
+        "lang": lang,
+        "cache": cache_type
+    }
     with open(CONFIG_PATH, "w", encoding="utf-8") as f:
         json.dump(config, f, indent=2)
     print(f"  -> {CONFIG_PATH}{MESSAGES[lang]['generated']}")
@@ -141,6 +146,7 @@ def main():
     parser.add_argument("--pbf", type=str, required=True, help="Path to the source OSM PBF file.")
     parser.add_argument("--tags", type=str, default="all", help="Tags to process (e.g., 'military,place' or 'all').")
     parser.add_argument("--lang", type=str, choices=["en", "tr"], default="en", help="Language for terminal logs (en or tr).")
+    parser.add_argument("--cache", type=str, choices=["auto", "ram", "disk"], default="auto", help="Node cache type.")
     args = parser.parse_args()
 
     target_tags = ALL_TARGET_TAGS if args.tags.lower() == "all" else [t.strip() for t in args.tags.split(",") if t.strip()]
@@ -148,10 +154,11 @@ def main():
     print("======================================================")
     print("  ZERO-TOUCH OSINT PIPELINE (Sıfır Temaslı ETL)")
     print(f"  OS: {platform.system()} | Tags: {len(target_tags)} | Lang: {args.lang.upper()}")
+    print(f"  Cache: {args.cache.upper()}")
     print("======================================================\n")
     
     clean_old_scripts(args.lang)
-    create_config_and_script(args.pbf, target_tags, args.lang)
+    create_config_and_script(args.pbf, target_tags, args.lang, args.cache)
     
     if IS_WINDOWS:
         run_command(["powershell", "-ExecutionPolicy", "Bypass", "-File", SCRIPT_PATH], args.lang, is_docker_step=True)
