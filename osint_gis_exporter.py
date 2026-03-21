@@ -31,6 +31,8 @@ MSG = {
         "ram_flush": "\n      >>> RAM Limit reached! Flushing {} records to temp file (Part {})...",
         "ram_load": "      ... {} objects loaded to RAM ...",
         "crit_mem": "\n[CRITICAL] {} is too large. PBF Node Cache exceeded RAM.",
+        "disk_cache": "\n[INFO] Large PBF detected ({:.1f} GB). Switching to Disk-Based Node Cache (Dense File Array) to prevent RAM explosion...",
+        "fallback_mem": "\n[WARNING] Memory error occurred. Attempting fallback to Disk-Based Cache...",
         "flush_final": "\n      >>> Flushing final {} records to temp storage (Part {})...",
         "merge_start": "\n   >>> Merging temporary chunks for {} via Streaming...",
         "merge_log": "      -> [Merge] Folder: {}/{}/ | Object Group: {} ({} chunks processing...)",
@@ -46,6 +48,8 @@ MSG = {
         "ram_flush": "\n      >>> RAM limiti aşıldı! {} kayıt geçici Parquet dosyasına yazılıyor (Part {})...",
         "ram_load": "      ... {} obje RAM'e alındı ...",
         "crit_mem": "\n[KRİTİK UYARI] {} çok büyük. PBF Node Cache RAM'i aştı.",
+        "disk_cache": "\n[BİLGİ] Devasa PBF dosyası tespit edildi ({:.1f} GB). RAM patlamasını kesin önlemek için Disk Tabanlı Önbellek (Dense File Array) sistemine geçiliyor...",
+        "fallback_mem": "\n[UYARI] Bellek hatası alındı. Sistem kendini Disk Tabanlı Önbellek ile yeniden başlatmaya çalışıyor...",
         "flush_final": "\n      >>> Kalan son {} kayıt geçici Parquet'ye yazılıyor (Part {})...",
         "merge_start": "\n   >>> {} için geçici parçalar Streaming (Akış) mantığıyla birleştiriliyor...",
         "merge_log": "      -> [Hiyerarşi] Klasör: {}/{}/ | Obje Grubu: {} ({} parça dosyaya işleniyor...)",
@@ -327,6 +331,7 @@ def main():
     target_tags = config.get("tags", [])
     selected_formats = config.get("formats", [])
     lang = config.get("lang", "en")
+    cache_type = config.get("cache", "auto")
 
     print(MSG[lang]["start"])
 
@@ -346,12 +351,37 @@ def main():
         print(MSG[lang]["process"].format(pbf_file))
         handler = AdvancedOsintHandler(tag, selected_formats, lang)
         
-        try:
-            handler.apply_file(pbf_file, locations=True)
-        except MemoryError:
-            print(MSG[lang]["crit_mem"].format(tag))
-            pass
+        # --- CACHE STRATEGY (RAM vs DISK) ---
+        pbf_size_gb = os.path.getsize(pbf_file) / (1024 * 1024 * 1024)
         
+        # Determine the effective cache method
+        use_disk = False
+        if cache_type == "disk":
+            use_disk = True
+        elif cache_type == "ram":
+            use_disk = False
+        else: # auto
+            if pbf_size_gb > 1.5:
+                print(MSG[lang]["disk_cache"].format(pbf_size_gb))
+                use_disk = True
+
+        try:
+            if use_disk:
+                handler.apply_file(pbf_file, locations=True, idx='dense_file_array')
+            else:
+                try:
+                    handler.apply_file(pbf_file, locations=True)
+                except MemoryError:
+                    print(MSG[lang]["crit_mem"].format(tag))
+                    print(MSG[lang]["fallback_mem"])
+                    # Cleanup and retry with disk
+                    handler.records.clear()
+                    gc.collect()
+                    handler.apply_file(pbf_file, locations=True, idx='dense_file_array')
+        except Exception as e:
+            print(f"\n[ERROR] {e}")
+        # ------------------------------------
+
         if handler.records:
             print(MSG[lang]["flush_final"].format(len(handler.records), handler.batch_id))
             save_temp_batch(handler.records, tag, handler.batch_id)
