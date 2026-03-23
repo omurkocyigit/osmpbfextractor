@@ -5,3 +5,4 @@ shapely
 pyogrio
 pyarrow
 psutil>=5.9
+duckdb>=1.1.0
