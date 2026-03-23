@@ -10,6 +10,13 @@ import gc
 import warnings
 import re
 import shutil
+import psutil
+
+# RAM izleme sabitleri
+# RAM monitoring constants
+RAM_FLUSH_THRESHOLD_PERCENT = 75   # Kullanılan RAM bu %'yi geçince erken flush / Flush early when RAM usage exceeds this %
+RAM_FLUSH_THRESHOLD_GB      = 2.0  # Boş RAM bu GB'ın altına düşünce erken flush / Flush early when free RAM drops below this GB
+RAM_CHECK_EVERY_N_RECORDS   = 5000 # Her N kayıtta bir RAM kontrol et / Check RAM every N records
 
 warnings.filterwarnings("ignore", category=RuntimeWarning, module="pyogrio")
 
@@ -36,7 +43,8 @@ MSG = {
         "flush_final": "\n      >>> Flushing final {} records to temp storage (Part {})...",
         "merge_start": "\n   >>> Merging temporary chunks for {} via Streaming...",
         "merge_log": "      -> [Merge] Folder: {}/{}/ | Object Group: {} ({} chunks processing...)",
-        "success": "\n=============================================\nSUCCESS: EXPORT COMPLETED!\nCheck '{}' folder.\n============================================="
+        "success": "\n=============================================\nSUCCESS: EXPORT COMPLETED!\nCheck '{}' folder.\n=============================================",
+        "ram_pressure": "\n      >>> RAM pressure detected! Flushing {} records early to disk (Part {})..."
     },
     "tr": {
         "start": "\n=============================================\n  3. ADIM: OSINT GIS EXPORTER (NİHAİ ÇIKARIM)\n=============================================\n",
@@ -53,7 +61,8 @@ MSG = {
         "flush_final": "\n      >>> Kalan son {} kayıt geçici Parquet'ye yazılıyor (Part {})...",
         "merge_start": "\n   >>> {} için geçici parçalar Streaming (Akış) mantığıyla birleştiriliyor...",
         "merge_log": "      -> [Hiyerarşi] Klasör: {}/{}/ | Obje Grubu: {} ({} parça dosyaya işleniyor...)",
-        "success": "\n=============================================\nMÜKEMMEL! TÜM İŞLEMLER BAŞARIYLA TAMAMLANDI!\nÇıktılarınız '{}' klasöründe sizi bekliyor.\n============================================="
+        "success": "\n=============================================\nMÜKEMMEL! TÜM İŞLEMLER BAŞARIYLA TAMAMLANDI!\nÇıktılarınız '{}' klasöründe sizi bekliyor.\n=============================================",
+        "ram_pressure": "\n      >>> RAM baskısı tespit edildi! {} kayıt erken diske yazılıyor (Part {})..."
     }
 }
 
@@ -82,6 +91,16 @@ def sanitize_name(name):
     # BOMBA 2 FIX: MAX_PATH çökmesini engellemek için isim uzunluğu 40 karakter ile sınırlandırıldı.
     clean = re.sub(r'(?u)[^-\w.]', '_', str(name).strip())
     return clean[:40]
+
+def is_ram_critical():
+    """RAM kullanımı tehlikeli eşiğe ulaştı mı kontrol eder.
+    Check if RAM usage has reached a critical threshold."""
+    try:
+        mem = psutil.virtual_memory()
+        return (mem.percent >= RAM_FLUSH_THRESHOLD_PERCENT or
+                mem.available < RAM_FLUSH_THRESHOLD_GB * 1024 ** 3)
+    except Exception:
+        return False
 
 def is_already_processed(tag, lang):
     tag_dir = os.path.join(OUTPUT_DIR, tag)
@@ -239,13 +258,20 @@ def merge_and_export_final(tag, formats, lang):
                     except Exception: pass
                     del subset_shp
 
-                # 5. GeoJSON - Boyut sınırı ve performans için parçalı birleştirilir
+                # 5. GeoJSON - 4GB sınırı gözetilerek parçalı birleştirilir (SHP mantığıyla aynı)
                 if "GeoJSON" in formats:
-                    if len(parts) <= batch_size:
-                        gj_path = f"{base_filename}.geojson"
-                    else:
-                        gj_path = f"{base_filename}_part{gj_part_idx}.geojson"
-                    
+                    while True:
+                        if len(parts) <= batch_size:
+                            gj_path = f"{base_filename}.geojson"
+                        else:
+                            gj_path = f"{base_filename}_part{gj_part_idx}.geojson"
+                        # Mevcut dosya 3.8GB'ı geçtiyse yeni part'a geç (Emniyet sınırı)
+                        # If existing file exceeds 3.8GB, move to next part (safety margin)
+                        if os.path.exists(gj_path) and os.path.getsize(gj_path) > 3.8 * 1024**3:
+                            gj_part_idx += 1
+                            continue
+                        break
+
                     batch_gdf.to_file(gj_path, driver="GeoJSON", engine="pyogrio")
                     gj_part_idx += 1
 
@@ -265,15 +291,29 @@ class AdvancedOsintHandler(osmium.SimpleHandler):
         
         self.islenen_kayit = 0
         self.batch_id = 1
-        self.BATCH_LIMIT = 200000 
+        self.BATCH_LIMIT = 200000
+        self._ram_check_ctr = 0  # RAM kontrol sayacı / RAM check counter
 
     def check_memory_and_flush(self):
-        if len(self.records) >= self.BATCH_LIMIT:
-            print(MSG[self.lang]["ram_flush"].format(self.BATCH_LIMIT, self.batch_id))
+        do_flush = len(self.records) >= self.BATCH_LIMIT
+
+        # Kayıt limiti dolmadıysa bile RAM baskısını izle
+        # Even if record limit not reached, monitor RAM pressure
+        if not do_flush:
+            self._ram_check_ctr += 1
+            if self._ram_check_ctr >= RAM_CHECK_EVERY_N_RECORDS:
+                self._ram_check_ctr = 0
+                if self.records and is_ram_critical():
+                    print(MSG[self.lang]["ram_pressure"].format(len(self.records), self.batch_id))
+                    do_flush = True
+
+        if do_flush:
+            print(MSG[self.lang]["ram_flush"].format(len(self.records), self.batch_id))
             save_temp_batch(self.records, self.target_key, self.batch_id)
             self.records.clear()
             gc.collect()
             self.batch_id += 1
+            self._ram_check_ctr = 0
 
     def process_element(self, tags, osm_id, osm_type, geom_wkt):
         if self.target_key in tags:
