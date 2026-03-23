@@ -1,0 +1,7 @@
+osmium
+pandas
+geopandas
+shapely
+pyogrio
+pyarrow
+psutil>=5.9
