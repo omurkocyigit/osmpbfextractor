@@ -2,96 +2,146 @@
 
 🇬🇧 English | [🇹🇷 Türkçe](#türkçe-dokümantasyon)
 
-An advanced, cross-platform (Windows/Linux) Data Engineering and ETL (Extract, Transform, Load) pipeline designed to securely and efficiently process massive OpenStreetMap (OSM) `.pbf` files. 
+An advanced, cross-platform (Windows/Linux) Data Engineering and ETL (Extract, Transform, Load) pipeline designed to securely and efficiently process massive OpenStreetMap (OSM) `.pbf` files.
 
 It splits planetary-scale data into categories, separates geometries (Points, Lines, Polygons), and handles system memory smartly using Map-Reduce batching and streaming techniques to avoid RAM crashes on massive layers like `highway` or `building`.
 
 ## ✨ Key Features
+
+* **Proactive RAM Guard:** Even if RAM mode is selected, the pipeline continuously monitors memory usage via `psutil`. When RAM utilization exceeds **75%** or free RAM drops below **2 GB**, records are flushed to disk immediately — before any `MemoryError` can occur. This makes RAM mode safe even for planet-scale `.pbf` files.
+* **Smart Merging & 4GB Limit Handling:** Instead of fragmented small files, the pipeline intelligently consolidates chunks into larger files. It respects the **4GB limit** for Shapefiles and GeoJSON, automatically creating new parts (`_part1.shp`, `_part2.shp`, `_part1.geojson`, …) only when necessary.
+* **Unified Exports:** GeoPackage and Parquet formats are merged into single files per category to avoid file clutter. SQLite is also kept as a single database per category.
 * **Zero-Touch Execution:** Just point to the source `.pbf`, and the pipeline autonomously handles Docker mounts, Osmium filtering, and GeoPandas exports within its own directory.
-* **Interactive Launcher:** Includes a `quick_run.py` script with drag-and-drop support and pre-defined extraction profiles (Strategic, Infrastructure, etc.).
-* **Enterprise-Grade Stability:** Built-in hardware and OS-level protections against Windows `MAX_PATH` length limits (filename truncation), SQLite "Too Many SQL Variables" errors (chunked database inserts), and GeoPackage schema mismatch issues (strict string typing across chunks).
-* **Cross-Platform:** Automatically generates `.ps1` (PowerShell) for Windows and `.sh` (Bash) for Linux/macOS environments.
-* **Smart Memory Management (Map-Reduce):** Prevents `MemoryError: bad allocation`. RAM is automatically flushed to temporary `.parquet` files every 200,000 records. Once parsing is done, it seamlessly merges them via streaming.
-* **Shapefile 4GB Limit Bypass:** Shapefiles exceeding standard geometry/file size limits are automatically chunked (`_part1.shp`, `_part2.shp`).
+* **Interactive Launcher:** Includes a `quick_run.py` script with drag-and-drop support and pre-defined extraction profiles (Full OSINT, Strategic, Infrastructure, Custom).
+* **Enterprise-Grade Stability:** Built-in protections against Windows `MAX_PATH` length limits, SQLite "Too Many SQL Variables" errors, and schema mismatch issues.
+* **Map-Reduce Memory Management:** RAM is flushed to temporary Parquet files every 200,000 records. Once parsing is done, chunks are merged in **1,000,000 record batches** to keep memory usage safe and efficient.
 * **Hierarchical Outputs:** Generates deep categorized folders (e.g., `osm_data/gis_outputs/boundary/administrative/administrative_points.gpkg`).
-* **Resumable (Crash-Proof):** If interrupted, the script detects existing directories, cleans up temporary broken files, and resumes right where it left off.
-* **Bilingual Logging:** Supports both English (`--lang en`) and Turkish (`--lang tr`) terminal outputs.
+* **Resumable (Crash-Proof):** If interrupted, the script cleans up temporary broken files and resumes from where it left off.
 
 ## ⚙️ Prerequisites
-1. **Python 3.8+** *(Tests were successfully conducted on Python 3.13)*
-2. **Docker:** Must be installed and the Docker Engine must be running in the background (Docker Desktop is recommended for Windows/macOS). The pipeline relies on the `stefda/osmium-tool` image to isolate C++ dependencies. 
-   You can pull the required image beforehand:
-   ```bash
-   docker pull stefda/osmium-tool
-   ```
+
+1. **Python 3.8+** *(Tested on Python 3.13)*
+2. **Docker:** Required for `stefda/osmium-tool` dependency isolation.
 3. **Python Packages:**
    ```bash
-   pip install osmium pandas geopandas shapely pyogrio pyarrow
+   pip install -r requirements.txt
+   ```
+   Or manually:
+   ```bash
+   pip install osmium pandas geopandas shapely pyogrio pyarrow psutil
    ```
 
 ## 🚀 Usage
 
 **Option A: Interactive Quick Launcher (Recommended)**
-Simply run the quick launcher. It will prompt you to drag & drop your `.pbf` file, select a language, and choose an extraction profile (Full, Strategic, Infrastructure, or Custom). No need to memorize commands.
 ```bash
 python quick_run.py
 ```
 
 **Option B: Command Line Interface (CLI)**
-You can specify the exact tags to filter and the language of the logs.
 ```bash
-# Windows Example (All tags, English logs)
-python auto_runner.py --pbf "C:\pbf\sample.pbf" --tags all --lang en
+python auto_runner.py --pbf "path/to/file.pbf" --tags all --lang en
+```
 
-# Linux Example (Specific tags, Turkish logs)
-python auto_runner.py --pbf "/var/data/sample.osm.pbf" --tags military,boundary,telecom --lang tr
+## 🧠 Cache Mode Selection
+
+When running `quick_run.py`, you will be asked to choose a node cache type:
+
+| Mode | Description | Best For |
+|------|-------------|----------|
+| **AUTO** *(Recommended)* | Uses DISK for files > 1.5 GB, RAM otherwise | General use |
+| **RAM** | Fast in-memory node cache + proactive RAM guard | Small/medium files |
+| **DISK** | Disk-based node cache (Dense File Array) | Planet-scale files |
+
+> **Note:** Even in RAM mode, the pipeline monitors memory every 5,000 records and flushes to disk automatically if RAM pressure is detected. You will not get an out-of-memory crash.
+
+## 📁 Output Structure
+
+```
+osm_data/gis_outputs/
+└── {tag}/
+    └── {sub_category}/
+        ├── {prefix}.gpkg          ← Single GeoPackage (no size limit)
+        ├── {prefix}.parquet       ← Single Parquet (or directory if very large)
+        ├── {prefix}.db            ← Single SQLite database
+        ├── {prefix}.geojson       ← GeoJSON, split at 3.8 GB
+        │   {prefix}_part2.geojson
+        └── shp/
+            ├── {prefix}.shp       ← Shapefile, split at 3.8 GB
+            └── {prefix}_part2.shp
 ```
 
 ---
 
 # 🇹🇷 Türkçe Dokümantasyon
 
-Devasa boyutlardaki OpenStreetMap (OSM) `.pbf` verilerini güvenli, hızlı ve sistem belleğini çökertmeden işlemek için tasarlanmış platformlar arası (Windows/Linux) Veri Mühendisliği ve ETL boru hattıdır.
+[🇬🇧 English](#-osm-pbf-extractor---zero-touch-etl-pipeline)
+
+Devasa boyutlardaki OpenStreetMap (OSM) `.pbf` verilerini güvenli, hızlı ve sistem belleğini çökertmeden işlemek için tasarlanmış ETL boru hattıdır.
 
 Verileri kategorilerine böler, her katmanı hiyerarşik olarak noktalar (points), çizgiler (lines) ve poligonlar olarak ayırır. `highway` veya `building` gibi milyarlarca kayıt barındıran katmanlarda sistemin kilitlenmesini önlemek için "Map-Reduce" mantığıyla özel bellek yönetimi uygular.
 
 ## ✨ Temel Özellikler
+
+* **Proaktif RAM Koruması:** RAM modu seçilmiş olsa bile sistem, `psutil` aracılığıyla bellek kullanımını sürekli izler. RAM kullanımı **%75'i** aşarsa veya boş RAM **2 GB'ın** altına düşerse, herhangi bir `MemoryError` hatası oluşmadan kayıtlar diske yazılır. Bu sayede RAM modu, planet boyutundaki `.pbf` dosyalarında bile güvenle kullanılabilir.
+* **Akıllı Birleştirme ve 4 GB Limit Yönetimi:** Artık veriler çok sayıda küçük parça yerine, limitler dahilinde birleştirilerek sunulur. **Shapefile ve GeoJSON** için 4 GB sınırı takip edilir; dosya bu boyutu aşarsa yeni parça (`_part1.shp`, `_part2.shp`, `_part1.geojson`, …) oluşturulur.
+* **Derli Toplu Çıktılar:** GeoPackage ve Parquet formatları, kategori başına tek bir dosyada birleştirilir. SQLite de kategori başına tek veritabanı olarak tutulur.
 * **Sıfır Temaslı Çalışma:** Sadece ana `.pbf` dosyasının yolunu verin; arka planda Docker'ı ayağa kaldırır, veriyi böler ve GIS formatlarına kendi klasörü içinde dönüştürür.
-* **Etkileşimli Başlatıcı:** Sürükle-bırak destekli ve hazır veri profilleri (Stratejik, Altyapı vb.) sunan `quick_run.py` betiği içerir.
-* **Kurumsal Seviye Kararlılık (Enterprise-Grade):** Windows `MAX_PATH` uzunluk sınırını aşma (etiket kırpma), SQLite "Too Many SQL Variables" çökmesini engelleme (1000'li paketler halinde yazma) ve GeoPackage şema kaymalarını (Schema Mismatch) önleme gibi donanımsal/yazılımsal stres noktalarına karşı tam koruma sağlar.
-* **Çapraz Platform (Cross-Platform):** Windows için otomatik olarak PowerShell (`.ps1`), Linux/macOS için Bash (`.sh`) betikleri üretir.
-* **Akıllı Bellek Yönetimi (Map-Reduce):** RAM şişmesini önler. Her 200.000 kayıtta bir bellek boşaltılarak geçici süper hızlı `.parquet` dosyalarına yazılır. PBF tamamen okunduğunda bu parçalar "Streaming" (akış) yöntemiyle RAM'i yormadan birleştirilir.
-* **Shapefile 4GB Limit Koruması:** Shapefile formatının boyutsal veya satır bazlı limitlerini aşan veriler otomatik olarak `_part1`, `_part2` olarak dilimlenir.
-* **Hiyerarşik Dosyalama:** Veriler `osm_data/gis_outputs/boundary/administrative/administrative_points.gpkg` şeklinde derinlemesine klasörlenerek çıkarılır.
-* **Kaldığı Yerden Devam Edebilme:** Elektrik kesintisi durumunda, işlem görmüş katmanları atlar, yarım kalan geçici dosyaları temizler ve hatasız şekilde kaldığı yerden devam eder.
-* **Çoklu Dil Desteği:** Terminal çıktıları için İngilizce (`--lang en`) ve Türkçe (`--lang tr`) dil seçenekleri sunar.
+* **Etkileşimli Başlatıcı:** Sürükle-bırak destekli `quick_run.py` betiği ve hazır profiller (Tam OSINT, Stratejik, Altyapı, Özel) içerir.
+* **Kurumsal Seviye Kararlılık:** Windows `MAX_PATH` uzunluk sınırı, SQLite "Too Many SQL Variables" çökmesi ve şema kaymalarına karşı tam koruma sağlar.
+* **Map-Reduce Bellek Yönetimi:** Veriler 200 bin kayıtta bir geçici Parquet dosyalarına yazılır ve ardından **1 milyonluk bloklar** halinde RAM dostu bir şekilde birleştirilir.
+* **Hiyerarşik Dosyalama:** Veriler `osm_data/gis_outputs/boundary/administrative/administrative_points.gpkg` şeklinde derinlemesine klasörlenir.
+* **Kaldığı Yerden Devam Edebilme:** Yarım kalan geçici dosyaları temizler ve hatasız şekilde kaldığı yerden devam eder.
 
 ## ⚙️ Gereksinimler
-1. **Python 3.8+** *(Testler Python 3.13 üzerinde başarıyla gerçekleştirilmiştir)*
-2. **Docker:** Sisteminizde kurulu ve Docker Engine arka planda çalışır durumda olmalıdır (Windows ve macOS kullanıcıları için Docker Desktop önerilir). İşlemler C++ bağımlılıklarını izole etmek adına `stefda/osmium-tool` imajı üzerinden yürütülür. 
-   Başlamadan önce ilgili Docker paketini indirmek için şu komutu çalıştırabilirsiniz:
-   ```bash
-   docker pull stefda/osmium-tool
-   ```
+
+1. **Python 3.8+**
+2. **Docker:** `stefda/osmium-tool` imajı üzerinden işlemler yürütülür.
 3. **Gerekli Python Kütüphaneleri:**
    ```bash
-   pip install osmium pandas geopandas shapely pyogrio pyarrow
+   pip install -r requirements.txt
+   ```
+   Ya da manuel olarak:
+   ```bash
+   pip install osmium pandas geopandas shapely pyogrio pyarrow psutil
    ```
 
 ## 🚀 Kullanım
 
 **Seçenek A: Etkileşimli Başlatıcı (Önerilen)**
-Sadece hızlı başlatıcıyı çalıştırın. Size PBF dosyanızı sürükleyip bırakmanızı, dil seçmenizi ve bir veri profili (Tüm, Stratejik, Altyapı veya Özel) seçmenizi soracaktır. Komut ezberlemenize gerek kalmaz.
 ```bash
 python quick_run.py
 ```
 
 **Seçenek B: Komut Satırı (CLI)**
-İster tüm etiketleri, isterseniz de sadece ihtiyacınız olanları ve log dilini belirtebilirsiniz.
 ```bash
-# Windows Örneği (Tüm etiketler, İngilizce Loglar)
-python auto_runner.py --pbf "C:\pbf\sample.pbf" --tags all --lang en
+python auto_runner.py --pbf "dosya/yolu.pbf" --tags all --lang tr
+```
 
-# Linux Örneği (Belirli etiketler, Türkçe Loglar)
-python auto_runner.py --pbf "/var/data/sample.osm.pbf" --tags military,boundary,telecom --lang tr
+## 🧠 Önbellek (Cache) Modu Seçimi
+
+`quick_run.py` çalıştırıldığında önbellek tipi sorulur:
+
+| Mod | Açıklama | En İyi Kullanım |
+|-----|----------|-----------------|
+| **OTOMATİK** *(Önerilen)* | 1,5 GB üzeri dosyalarda DISK, altında RAM kullanır | Genel kullanım |
+| **RAM** | Hızlı bellek içi önbellek + proaktif RAM koruması | Küçük/orta dosyalar |
+| **DİSK** | Disk tabanlı önbellek (Dense File Array) | Planet boyutlu dosyalar |
+
+> **Not:** RAM modunda bile sistem her 5.000 kayıtta bir belleği kontrol eder ve RAM baskısı algılanırsa otomatik olarak diske yazar. Yetersiz bellek hatası (OOM) almazsınız.
+
+## 📁 Çıktı Yapısı
+
+```
+osm_data/gis_outputs/
+└── {etiket}/
+    └── {alt_kategori}/
+        ├── {ön_ek}.gpkg          ← Tek GeoPackage dosyası (boyut sınırı yok)
+        ├── {ön_ek}.parquet       ← Tek Parquet dosyası (veya çok büyükse dizin)
+        ├── {ön_ek}.db            ← Tek SQLite veritabanı
+        ├── {ön_ek}.geojson       ← GeoJSON, 3,8 GB'da bölünür
+        │   {ön_ek}_part2.geojson
+        └── shp/
+            ├── {ön_ek}.shp       ← Shapefile, 3,8 GB'da bölünür
+            └── {ön_ek}_part2.shp
 ```
