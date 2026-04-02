@@ -182,6 +182,7 @@ def merge_and_export_final(tag, formats, lang):
 
         for prefix in prefixes:
             parts = [f for f in temp_files if f.startswith(f"{prefix}_part")]
+            # Numerik sıralama (part1, part2, part10 vb. doğru sıralansın diye)
             parts.sort(key=lambda x: int(re.search(r'_part(\d+)\.parquet', x).group(1)))
             print(MSG[lang]["merge_log"].format(tag, subcat_folder, prefix, len(parts)))
             base_filename = os.path.join(subcat_dir, prefix)
