@@ -1,0 +1,7 @@
+# Otomatik oluşturulan dosyalar
+export_config.json
+osint_filter.ps1
+osint_filter.sh
+
+# OSM veri klasörü (büyük PBF ve çıktı dosyaları)
+osm_data/
